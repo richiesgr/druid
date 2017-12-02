@@ -30,6 +30,7 @@ import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
 import io.druid.data.input.impl.DimensionSchema;
 import io.druid.data.input.impl.DimensionSchema.MultiValueHandling;
 import io.druid.data.input.impl.DimensionsSpec;
@@ -79,8 +80,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
@@ -475,12 +478,19 @@ public class CompactionTask extends AbstractTask
       if (segments != null) {
         Collections.sort(usedSegments);
         Collections.sort(segments);
-        Preconditions.checkState(
-            usedSegments.equals(segments),
-            "Specified segments[%s] are different from the current used segments[%s]",
-            segments,
-            usedSegments
-        );
+
+        if (!usedSegments.equals(segments)) {
+          final Set<DataSegment> usedSegmentSet = new HashSet<>(usedSegments);
+          final Set<DataSegment> givenSegmentSet = new HashSet<>(segments);
+          final Set<DataSegment> unknownSegments = Sets.difference(givenSegmentSet, usedSegmentSet);
+          final Set<DataSegment> missingSegments = Sets.difference(usedSegmentSet, givenSegmentSet);
+          throw new ISE(
+              "Specified segments in the spec are different from the current used segments. "
+              + "There are unknown segments[%s] and missing segments[%s] in the spec.",
+              unknownSegments,
+              missingSegments
+          );
+        }
       }
       return usedSegments;
     }
