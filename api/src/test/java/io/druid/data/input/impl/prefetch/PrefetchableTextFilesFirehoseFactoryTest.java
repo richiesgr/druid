@@ -21,6 +21,7 @@ package io.druid.data.input.impl.prefetch;
 
 import com.google.common.base.Charsets;
 import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
 import com.google.common.collect.Lists;
 import com.google.common.io.CountingOutputStream;
 import io.druid.data.input.Firehose;
@@ -30,6 +31,7 @@ import io.druid.data.input.impl.DimensionsSpec;
 import io.druid.data.input.impl.StringInputRowParser;
 import io.druid.data.input.impl.TimestampSpec;
 import io.druid.java.util.common.DateTimes;
+import io.druid.java.util.common.RetryUtils;
 import io.druid.java.util.common.StringUtils;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.filefilter.TrueFileFilter;
@@ -377,7 +379,6 @@ public class PrefetchableTextFilesFirehoseFactoryTest
 
   static class TestPrefetchableTextFilesFirehoseFactory extends PrefetchableTextFilesFirehoseFactory<File>
   {
-    private static final long defaultTimeout = 1000;
     private final long sleepMillis;
     private final File baseDir;
     private int openExceptionCount;
@@ -389,9 +390,26 @@ public class PrefetchableTextFilesFirehoseFactoryTest
           1024,
           cacheCapacity,
           fetchCapacity,
-          defaultTimeout,
           3,
           0,
+          0
+      );
+    }
+
+    static TestPrefetchableTextFilesFirehoseFactory with(
+        File baseDir,
+        long cacheCapacity,
+        long fetchCapacity,
+        int openExceptionCount
+    )
+    {
+      return new TestPrefetchableTextFilesFirehoseFactory(
+          baseDir,
+          1024,
+          cacheCapacity,
+          fetchCapacity,
+          3,
+          openExceptionCount,
           0
       );
     }
@@ -403,7 +421,6 @@ public class PrefetchableTextFilesFirehoseFactoryTest
           1024,
           2048,
           2048,
-          defaultTimeout,
           3,
           0,
           0
@@ -417,7 +434,6 @@ public class PrefetchableTextFilesFirehoseFactoryTest
           1024,
           2048,
           2048,
-          defaultTimeout,
           3,
           count,
           0
@@ -438,7 +454,39 @@ public class PrefetchableTextFilesFirehoseFactoryTest
       );
     }
 
-    public TestPrefetchableTextFilesFirehoseFactory(
+    private static long computeTimeout(int maxRetry)
+    {
+      // See RetryUtils.nextRetrySleepMillis()
+      final double maxFuzzyMultiplier = 2.;
+      return (long) Math.min(
+          RetryUtils.MAX_SLEEP_MILLIS,
+          RetryUtils.BASE_SLEEP_MILLIS * Math.pow(2, maxRetry - 1) * maxFuzzyMultiplier
+      );
+    }
+
+    TestPrefetchableTextFilesFirehoseFactory(
+        File baseDir,
+        long prefetchTriggerThreshold,
+        long maxCacheCapacityBytes,
+        long maxFetchCapacityBytes,
+        int maxRetry,
+        int openExceptionCount,
+        long sleepMillis
+    )
+    {
+      this(
+          baseDir,
+          prefetchTriggerThreshold,
+          maxCacheCapacityBytes,
+          maxFetchCapacityBytes,
+          computeTimeout(maxRetry),
+          maxRetry,
+          openExceptionCount,
+          sleepMillis
+      );
+    }
+
+    TestPrefetchableTextFilesFirehoseFactory(
         File baseDir,
         long prefetchTriggerThreshold,
         long maxCacheCapacityBytes,
@@ -493,6 +541,12 @@ public class PrefetchableTextFilesFirehoseFactoryTest
     protected InputStream wrapObjectStream(File object, InputStream stream) throws IOException
     {
       return stream;
+    }
+
+    @Override
+    protected Predicate<Throwable> getRetryCondition()
+    {
+      return e -> e instanceof IOException;
     }
   }
 }

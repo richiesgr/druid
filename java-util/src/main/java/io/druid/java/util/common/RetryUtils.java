@@ -24,12 +24,15 @@ import com.google.common.base.Predicate;
 import com.google.common.base.Throwables;
 import io.druid.java.util.common.logger.Logger;
 
+import javax.annotation.Nullable;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ThreadLocalRandom;
 
 public class RetryUtils
 {
   public static final Logger log = new Logger(RetryUtils.class);
+  public static final long MAX_SLEEP_MILLIS = 60000;
+  public static final long BASE_SLEEP_MILLIS = 1000;
 
   /**
    * Retry an operation using fuzzy exponentially increasing backoff. The wait time after the nth failed attempt is
@@ -50,12 +53,14 @@ public class RetryUtils
    */
   public static <T> T retry(
       final Callable<T> f,
-      Predicate<Throwable> shouldRetry,
+      final Predicate<Throwable> shouldRetry,
       final int quietTries,
-      final int maxTries
+      final int maxTries,
+      @Nullable final String messageOnRetry
   ) throws Exception
   {
     Preconditions.checkArgument(maxTries > 0, "maxTries > 0");
+    Preconditions.checkArgument(quietTries >= 0, "quietTries >= 0");
     int nTry = 0;
     while (true) {
       try {
@@ -64,7 +69,7 @@ public class RetryUtils
       }
       catch (Throwable e) {
         if (nTry < maxTries && shouldRetry.apply(e)) {
-          awaitNextRetry(e, nTry, nTry <= quietTries);
+          awaitNextRetry(e, messageOnRetry, nTry, maxTries, nTry <= quietTries);
         } else {
           Throwables.propagateIfInstanceOf(e, Exception.class);
           throw Throwables.propagate(e);
@@ -78,18 +83,43 @@ public class RetryUtils
    */
   public static <T> T retry(final Callable<T> f, Predicate<Throwable> shouldRetry, final int maxTries) throws Exception
   {
-    return retry(f, shouldRetry, 0, maxTries);
+    return retry(f, shouldRetry, 0, maxTries, null);
   }
 
-  private static void awaitNextRetry(final Throwable e, final int nTry, final boolean quiet) throws InterruptedException
+  public static <T> T retry(
+      final Callable<T> f,
+      final Predicate<Throwable> shouldRetry,
+      final int maxTries,
+      final String messageOnRetry
+  ) throws Exception
   {
+    return retry(f, shouldRetry, 0, maxTries, messageOnRetry);
+  }
 
+  private static void awaitNextRetry(
+      final Throwable e,
+      @Nullable final String messageOnRetry,
+      final int nTry,
+      final int maxTries,
+      final boolean quiet
+  ) throws InterruptedException
+  {
     final long sleepMillis = nextRetrySleepMillis(nTry);
+    final int nRetry = nTry + 1;
+    final String fullMessage = messageOnRetry == null ?
+                               StringUtils.format("Retrying (%d of %d) in %,dms.", nRetry, maxTries, sleepMillis) :
+                               StringUtils.format(
+                                   "%s, retrying (%d of %d) in %,dms.",
+                                   messageOnRetry,
+                                   nRetry,
+                                   maxTries,
+                                   sleepMillis
+                               );
 
     if (quiet) {
-      log.debug(e, "Failed on try %d, retrying in %,dms.", nTry, sleepMillis);
+      log.debug(e, fullMessage);
     } else {
-      log.warn(e, "Failed on try %d, retrying in %,dms.", nTry, sleepMillis);
+      log.warn(e, fullMessage);
     }
 
     Thread.sleep(sleepMillis);
@@ -97,10 +127,8 @@ public class RetryUtils
 
   public static long nextRetrySleepMillis(final int nTry)
   {
-    final long baseSleepMillis = 1000;
-    final long maxSleepMillis = 60000;
     final double fuzzyMultiplier = Math.min(Math.max(1 + 0.2 * ThreadLocalRandom.current().nextGaussian(), 0), 2);
-    final long sleepMillis = (long) (Math.min(maxSleepMillis, baseSleepMillis * Math.pow(2, nTry - 1))
+    final long sleepMillis = (long) (Math.min(MAX_SLEEP_MILLIS, BASE_SLEEP_MILLIS * Math.pow(2, nTry - 1))
                                      * fuzzyMultiplier);
     return sleepMillis;
   }
